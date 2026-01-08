@@ -45,8 +45,13 @@ async function getTransactionsData(edgeKV, month) {
   return Array.isArray(data) ? data : [];
 }
 
-// 4. 生成ID
-const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+// 4. 生成ID（增强唯一性，避免并发冲突）
+const generateId = () => {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 9);
+  const extra = Math.random().toString(36).substring(2, 6);
+  return `${timestamp.toString(36)}_${random}_${extra}`;
+};
 
 // --- 主函数 ---
 
@@ -75,8 +80,19 @@ export default {
         const dateStr = body.date || getBJTime().full;
         const month = dateStr.substring(0, 7);
         
+        // 生成唯一ID
+        let newId = generateId();
+        const list = await getTransactionsData(edgeKV, month);
+        
+        // 确保ID唯一（简单检查，如果冲突则重新生成）
+        let retryCount = 0;
+        while (list.find(t => t.id === newId) && retryCount < 5) {
+          newId = generateId();
+          retryCount++;
+        }
+        
         const newRecord = {
-          id: generateId(),
+          id: newId,
           type: body.type === 'income' ? 'income' : 'expense',
           amount: parseFloat(parseFloat(body.amount || 0).toFixed(2)),
           category: String(body.category || 'other'),
@@ -85,7 +101,6 @@ export default {
           createdAt: new Date().toISOString()
         };
 
-        const list = await getTransactionsData(edgeKV, month);
         list.push(newRecord);
         await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
         return new Response(JSON.stringify(newRecord), { status: 201, headers: corsHeaders });

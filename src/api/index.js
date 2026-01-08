@@ -23,7 +23,10 @@ export const transactionAPI = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    if (!response.ok) throw new Error('请求失败');
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: '添加失败' }));
+      throw new Error(error.error || '添加失败');
+    }
     return await response.json();
   },
 
