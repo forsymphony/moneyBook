@@ -91,9 +91,10 @@ const handleMonthChange = (month) => {
 const handleSubmit = async (data) => {
   try {
     if (editingTransaction.value) {
-      // 更新时传递当前月份，提高查找效率
+      // 更新时传递当前月份和原始日期，提高查找效率
       const originalMonth = editingTransaction.value.date ? editingTransaction.value.date.substring(0, 7) : currentMonth.value
-      await transactionAPI.updateTransaction(editingTransaction.value.id, data, originalMonth)
+      const originalDate = editingTransaction.value.date // 传递原始日期，用于快速定位
+      await transactionAPI.updateTransaction(editingTransaction.value.id, data, originalMonth, originalDate)
     } else {
       await transactionAPI.addTransaction(data)
     }
