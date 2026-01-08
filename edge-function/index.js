@@ -31,32 +31,139 @@ function getBJTime(dateInput = new Date()) {
   };
 }
 
-// 2. 获取 KV 键名 (transactions_YYYY_MM)
-function getTransactionsKey(monthStr) {
-  return `transactions_${monthStr.replace('-', '_')}`;
+// 2. 获取 KV 键名 - 按日期+哈希分散存储（更细化）
+// 格式: transactions_YYYY_MM_DD_HH (按小时分散) 或 transactions_YYYY_MM_DD_hash (按ID哈希分散)
+// 使用日期+ID哈希的组合，既保证查询效率，又最大化分散
+
+// 简单的哈希函数（用于分散key）
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(36).substring(0, 4);
 }
 
-// 3. 健壮的读取逻辑：处理新旧Key迁移及空值
+// 根据日期和ID生成key（按日期+ID哈希分散，分成16个bucket）
+function getTransactionsKeyByDateAndHash(dateStr, id) {
+  // dateStr 格式: YYYY-MM-DD
+  const datePart = dateStr.replace(/-/g, '_');
+  // 使用ID的前几个字符进行哈希，分散到16个bucket (0-f)
+  const hash = id ? simpleHash(id) : Math.random().toString(36).substring(2, 6);
+  const bucket = hash.substring(0, 2); // 取前2位，分成更多bucket
+  return `transactions_${datePart}_${bucket}`;
+}
+
+// 获取某日期的所有可能的 key (用于读取该日期的所有数据)
+function getDateKeys(dateStr) {
+  // 生成所有可能的bucket key (00-ff，256个bucket)
+  const keys = [];
+  const datePart = dateStr.replace(/-/g, '_');
+  // 使用16进制，分成256个bucket (00-ff)
+  for (let i = 0; i < 256; i++) {
+    const bucket = i.toString(16).padStart(2, '0');
+    keys.push(`transactions_${datePart}_${bucket}`);
+  }
+  return keys;
+}
+
+// 获取月份的所有可能的 key (用于读取整个月的数据)
+function getMonthKeys(monthStr) {
+  // monthStr 格式: YYYY-MM
+  const [year, month] = monthStr.split('-');
+  const daysInMonth = new Date(parseInt(year), parseInt(month), 0).getDate();
+  const keys = [];
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayStr = String(day).padStart(2, '0');
+    const dateStr = `${year}-${month}-${dayStr}`;
+    keys.push(...getDateKeys(dateStr));
+  }
+  return keys;
+}
+
+// 3. 健壮的读取逻辑：从多个 key 读取并合并数据
 async function getTransactionsData(edgeKV, month) {
-  const newKey = getTransactionsKey(month);
-  const oldKey = `transactions_${month}`;
+  const monthKeys = getMonthKeys(month);
+  const oldKey = `transactions_${month.replace('-', '_')}`; // 兼容旧格式（按月）
+  const oldDateKeys = []; // 兼容旧格式（按日期）
   
-  // 直接读取最新数据，不使用缓存
-  let data = await edgeKV.get(newKey, { type: 'json' });
+  // 生成旧格式的日期key（兼容按日期分散的旧格式）
+  const [year, monthNum] = month.split('-');
+  const daysInMonth = new Date(parseInt(year), parseInt(monthNum), 0).getDate();
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayStr = String(day).padStart(2, '0');
+    oldDateKeys.push(`transactions_${year}_${monthNum}_${dayStr}`);
+  }
   
-  // 如果新Key不存在，尝试读取旧Key
-  if (data === null) {
-    data = await edgeKV.get(oldKey, { type: 'json' });
-    if (data && Array.isArray(data)) {
-      await edgeKV.put(newKey, JSON.stringify(data)); // 自动迁移
+  // 并行读取所有 key（分批读取，避免一次性读取太多）
+  const batchSize = 50;
+  let allData = [];
+  
+  for (let i = 0; i < monthKeys.length; i += batchSize) {
+    const batch = monthKeys.slice(i, i + batchSize);
+    const promises = batch.map(key => edgeKV.get(key, { type: 'json' }));
+    const results = await Promise.all(promises);
+    
+    results.forEach((data) => {
+      if (data && Array.isArray(data)) {
+        allData = allData.concat(data);
+      }
+    });
+  }
+  
+  // 兼容旧格式：如果新格式没有数据，尝试读取旧格式
+  if (allData.length === 0) {
+    // 先尝试按日期分散的旧格式
+    const oldDatePromises = oldDateKeys.map(key => edgeKV.get(key, { type: 'json' }));
+    const oldDateResults = await Promise.all(oldDatePromises);
+    
+    oldDateResults.forEach((data) => {
+      if (data && Array.isArray(data)) {
+        allData = allData.concat(data);
+      }
+    });
+    
+    // 如果还是没有，尝试按月存储的旧格式
+    if (allData.length === 0) {
+      const oldData = await edgeKV.get(oldKey, { type: 'json' });
+      if (oldData && Array.isArray(oldData)) {
+        // 迁移旧数据：按日期+哈希分散到新的 key
+        const dataByKey = {};
+        oldData.forEach(item => {
+          const date = item.date || month + '-01';
+          const key = getTransactionsKeyByDateAndHash(date, item.id);
+          if (!dataByKey[key]) {
+            dataByKey[key] = [];
+          }
+          dataByKey[key].push(item);
+        });
+        
+        // 保存到新的 key
+        for (const [key, items] of Object.entries(dataByKey)) {
+          await edgeKV.put(key, JSON.stringify(items));
+        }
+        allData = oldData;
+      }
     }
   }
   
-  const result = Array.isArray(data) ? data : [];
-  // 打印读取到的数据，用于调试
-  console.log(`[getTransactionsData] month: ${month}, key: ${newKey}, count: ${result.length}`);
+  // 按日期和创建时间排序
+  allData.sort((a, b) => {
+    const dateCompare = (a.date || '').localeCompare(b.date || '');
+    if (dateCompare !== 0) return dateCompare;
+    return (a.createdAt || '').localeCompare(b.createdAt || '');
+  });
   
-  return result;
+  console.log(`[getTransactionsData] month: ${month}, total count: ${allData.length}, keys checked: ${monthKeys.length}`);
+  
+  return allData;
+}
+
+// 根据日期和ID获取对应的 key
+function getKeyForTransaction(dateStr, id) {
+  return getTransactionsKeyByDateAndHash(dateStr, id);
 }
 
 // 4. 生成ID（增强唯一性，避免并发冲突）
@@ -96,17 +203,25 @@ export default {
         const dateStr = body.date || getBJTime().full;
         const month = dateStr.substring(0, 7);
         
-        console.log(`[POST /api/transactions] 添加记录，月份: ${month}, 金额: ${body.amount}`);
+        console.log(`[POST /api/transactions] 添加记录，日期: ${dateStr}, 金额: ${body.amount}`);
         
         // 生成唯一ID
         let newId = generateId();
-        const list = await getTransactionsData(edgeKV, month);
-        console.log(`[POST /api/transactions] 读取到的数据条数: ${list.length}`);
+        
+        // 根据日期和ID获取对应的 key（按日期+哈希分散存储，更细化）
+        let dateKey = getKeyForTransaction(dateStr, newId);
+        
+        // 读取该key的数据（只读取对应的bucket，大幅减少冲突）
+        let dateData = await edgeKV.get(dateKey, { type: 'json' }) || [];
+        if (!Array.isArray(dateData)) dateData = [];
         
         // 确保ID唯一（简单检查，如果冲突则重新生成）
         let retryCount = 0;
-        while (list.find(t => t.id === newId) && retryCount < 5) {
+        while (dateData.find(t => t.id === newId) && retryCount < 5) {
           newId = generateId();
+          dateKey = getKeyForTransaction(dateStr, newId); // 重新计算key
+          dateData = await edgeKV.get(dateKey, { type: 'json' }) || [];
+          if (!Array.isArray(dateData)) dateData = [];
           retryCount++;
         }
         
@@ -119,11 +234,12 @@ export default {
           note: String(body.note || '').substring(0, 100),
           createdAt: new Date().toISOString()
         };
-
-        list.push(newRecord);
-        console.log(`[POST /api/transactions] 准备保存，总条数: ${list.length}, 新记录ID: ${newId}`);
-        await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
-        console.log(`[POST /api/transactions] 保存完成，已保存 ${list.length} 条数据`);
+        
+        dateData.push(newRecord);
+        
+        console.log(`[POST /api/transactions] 准备保存到 key: ${dateKey}, 该bucket记录数: ${dateData.length}, 新记录ID: ${newId}`);
+        await edgeKV.put(dateKey, JSON.stringify(dateData));
+        console.log(`[POST /api/transactions] 保存完成`);
         
         return jsonResponse(newRecord, 201);
       }
@@ -132,27 +248,108 @@ export default {
       if (method === 'PUT' && pathname.startsWith('/api/transactions/')) {
         const id = pathname.split('/').pop();
         const body = await request.json();
-        const month = url.searchParams.get('month') || getBJTime().month; // 建议前端传入原月份
+        const monthHint = url.searchParams.get('month') || getBJTime().month;
 
-        const list = await getTransactionsData(edgeKV, month);
-        const idx = list.findIndex(t => t.id === id);
+        // 先尝试根据ID快速定位（如果知道原日期）
+        let foundRecord = null;
+        let foundKey = null;
+        let foundIndex = -1;
         
-        if (idx === -1) throw new Error('记录未找到，请确认月份参数是否正确');
+        // 如果body中有原日期，可以快速定位
+        if (body.originalDate) {
+          const possibleKey = getKeyForTransaction(body.originalDate, id);
+          const data = await edgeKV.get(possibleKey, { type: 'json' }) || [];
+          if (Array.isArray(data)) {
+            const idx = data.findIndex(t => t.id === id);
+            if (idx !== -1) {
+              foundRecord = data[idx];
+              foundKey = possibleKey;
+              foundIndex = idx;
+            }
+          }
+        }
+        
+        // 如果快速定位失败，搜索整个月份的所有key
+        if (!foundRecord) {
+          const monthKeys = monthHint ? getMonthKeys(monthHint) : getMonthKeys(getBJTime().month);
+          
+          // 分批搜索，避免一次性读取太多
+          const batchSize = 50;
+          for (let i = 0; i < monthKeys.length; i += batchSize) {
+            const batch = monthKeys.slice(i, i + batchSize);
+            const promises = batch.map(key => edgeKV.get(key, { type: 'json' }));
+            const results = await Promise.all(promises);
+            
+            for (let j = 0; j < results.length; j++) {
+              const data = results[j];
+              if (Array.isArray(data)) {
+                const idx = data.findIndex(t => t.id === id);
+                if (idx !== -1) {
+                  foundRecord = data[idx];
+                  foundKey = batch[j];
+                  foundIndex = idx;
+                  break;
+                }
+              }
+            }
+            if (foundRecord) break;
+          }
+        }
+        
+        // 如果还没找到，搜索最近3个月
+        if (!foundRecord) {
+          for (let i = 0; i < 3; i++) {
+            const d = new Date();
+            d.setMonth(d.getMonth() - i);
+            const m = getBJTime(d).month;
+            const keys = getMonthKeys(m);
+            
+            const batchSize = 50;
+            for (let j = 0; j < keys.length; j += batchSize) {
+              const batch = keys.slice(j, j + batchSize);
+              const promises = batch.map(key => edgeKV.get(key, { type: 'json' }));
+              const results = await Promise.all(promises);
+              
+              for (let k = 0; k < results.length; k++) {
+                const data = results[k];
+                if (Array.isArray(data)) {
+                  const idx = data.findIndex(t => t.id === id);
+                  if (idx !== -1) {
+                    foundRecord = data[idx];
+                    foundKey = batch[k];
+                    foundIndex = idx;
+                    break;
+                  }
+                }
+              }
+              if (foundRecord) break;
+            }
+            if (foundRecord) break;
+          }
+        }
+        
+        if (!foundRecord) throw new Error('记录未找到，请确认月份参数是否正确');
 
-        // 更新逻辑：处理可能的跨月移动
-        const updated = { ...list[idx], ...body, updatedAt: new Date().toISOString() };
+        // 更新逻辑：处理可能的跨日期移动
+        const updated = { ...foundRecord, ...body, updatedAt: new Date().toISOString() };
+        const newDate = body.date || foundRecord.date;
+        const newKey = getKeyForTransaction(newDate, id); // 使用ID计算新key
         
-        if (body.date && body.date.substring(0, 7) !== month) {
-          // 跨月了：从当前月删除，加到新月
-          list.splice(idx, 1);
-          await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
-          const newList = await getTransactionsData(edgeKV, body.date.substring(0, 7));
-          newList.push(updated);
-          await edgeKV.put(getTransactionsKey(body.date.substring(0, 7)), JSON.stringify(newList));
+        if (newKey !== foundKey) {
+          // 跨日期了：从旧key删除，加到新key
+          const oldData = await edgeKV.get(foundKey, { type: 'json' }) || [];
+          oldData.splice(foundIndex, 1);
+          await edgeKV.put(foundKey, JSON.stringify(oldData));
+          
+          const newData = await edgeKV.get(newKey, { type: 'json' }) || [];
+          if (!Array.isArray(newData)) newData = [];
+          newData.push(updated);
+          await edgeKV.put(newKey, JSON.stringify(newData));
         } else {
-          // 同月内修改
-          list[idx] = updated;
-          await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
+          // 同key内修改
+          const data = await edgeKV.get(foundKey, { type: 'json' }) || [];
+          data[foundIndex] = updated;
+          await edgeKV.put(foundKey, JSON.stringify(data));
         }
         return jsonResponse(updated);
       }
@@ -161,19 +358,34 @@ export default {
       if (method === 'DELETE' && pathname.startsWith('/api/transactions/')) {
         const id = pathname.split('/').pop();
         const monthHint = url.searchParams.get('month');
+        
         // 如果前端没传 month，则只搜最近3个月，防止性能浪费
         const toSearch = monthHint ? [monthHint] : [0, 1, 2].map(i => {
           const d = new Date(); d.setMonth(d.getMonth() - i);
           return getBJTime(d).month;
         });
 
+        // 分批搜索所有可能的 key
         for (const m of toSearch) {
-          let list = await getTransactionsData(edgeKV, m);
-          const startLen = list.length;
-          list = list.filter(t => t.id !== id);
-          if (list.length !== startLen) {
-            await edgeKV.put(getTransactionsKey(m), JSON.stringify(list));
-            return jsonResponse({ success: true });
+          const monthKeys = getMonthKeys(m);
+          const batchSize = 50;
+          
+          for (let i = 0; i < monthKeys.length; i += batchSize) {
+            const batch = monthKeys.slice(i, i + batchSize);
+            const promises = batch.map(key => edgeKV.get(key, { type: 'json' }));
+            const results = await Promise.all(promises);
+            
+            for (let j = 0; j < results.length; j++) {
+              const data = results[j];
+              if (Array.isArray(data)) {
+                const idx = data.findIndex(t => t.id === id);
+                if (idx !== -1) {
+                  data.splice(idx, 1);
+                  await edgeKV.put(batch[j], JSON.stringify(data));
+                  return jsonResponse({ success: true });
+                }
+              }
+            }
           }
         }
         return jsonResponse({ error: 'Record not found' }, 404);
