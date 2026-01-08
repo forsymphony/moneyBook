@@ -6,7 +6,10 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
-  'Content-Type': 'application/json;charset=UTF-8'
+  'Content-Type': 'application/json;charset=UTF-8',
+  'Cache-Control': 'no-cache, no-store, must-revalidate',
+  'Pragma': 'no-cache',
+  'Expires': '0'
 };
 
 // --- 工具函数 ---
@@ -71,7 +74,7 @@ export default {
       if (method === 'GET' && pathname === '/api/transactions') {
         const month = url.searchParams.get('month') || getBJTime().month;
         const transactions = await getTransactionsData(edgeKV, month);
-        console.log(`[GET /api/transactions] month: ${month}, count: ${transactions.length}, data:`, JSON.stringify(transactions));
+        console.log(`[GET /api/transactions] month: ${month}, count: ${transactions.length}`);
         return new Response(JSON.stringify(transactions), { headers: corsHeaders });
       }
 
@@ -84,7 +87,7 @@ export default {
         // 生成唯一ID
         let newId = generateId();
         const list = await getTransactionsData(edgeKV, month);
-        console.log(`[POST /api/transactions] 读取数据 - month: ${month}, count: ${list.length}, data:`, JSON.stringify(list));
+        console.log(`[POST /api/transactions] 读取数据 - month: ${month}, count: ${list.length}`);
         
         // 确保ID唯一（简单检查，如果冲突则重新生成）
         let retryCount = 0;
@@ -104,12 +107,12 @@ export default {
         };
 
         list.push(newRecord);
-        console.log(`[POST /api/transactions] 准备保存 - month: ${month}, 新记录:`, JSON.stringify(newRecord), `总条数: ${list.length}`);
+        console.log(`[POST /api/transactions] 准备保存 - month: ${month}, 新记录ID: ${newId}, 总条数: ${list.length}`);
         await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
+        console.log(`[POST /api/transactions] 保存完成 - month: ${month}, 新记录:`, JSON.stringify(newRecord));
         
-        // 保存后再次读取验证
-        const verifyList = await getTransactionsData(edgeKV, month);
-        console.log(`[POST /api/transactions] 保存后验证 - month: ${month}, count: ${verifyList.length}, data:`, JSON.stringify(verifyList));
+        // 注意：EdgeKV 是最终一致性，写入后立即读取可能读取到旧数据
+        // 直接返回新记录，不进行验证读取，避免延迟问题
         
         return new Response(JSON.stringify(newRecord), { status: 201, headers: corsHeaders });
       }
