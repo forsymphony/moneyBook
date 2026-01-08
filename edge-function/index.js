@@ -35,7 +35,8 @@ function getYearMonth(dateStr) {
 // 获取KV键名（按月存储）
 function getTransactionsKey(dateStr) {
   const yearMonth = getYearMonth(dateStr);
-  return `transactions_${yearMonth}`;
+  // 将 YYYY-MM 格式转换为 YYYY_MM 格式（下划线分隔）
+  return `transactions_${yearMonth.replace('-', '_')}`;
 }
 
 export default {
@@ -57,7 +58,8 @@ export default {
       // GET /api/transactions?month=2024-01
       if (method === 'GET' && pathname === '/api/transactions') {
         const month = url.searchParams.get('month') || getYearMonth(new Date().toISOString());
-        const key = `transactions_${month}`;
+        // 将 YYYY-MM 格式转换为 YYYY_MM 格式（下划线分隔）
+        const key = `transactions_${month.replace('-', '_')}`;
         
         const data = await edgeKV.get(key, { type: 'json' });
         const transactions = data || [];
@@ -145,7 +147,8 @@ export default {
 
         // 在所有可能的月份中查找
         for (const month of months) {
-          const key = `transactions_${month}`;
+          // 将 YYYY-MM 格式转换为 YYYY_MM 格式（下划线分隔）
+          const key = `transactions_${month.replace('-', '_')}`;
           const transactions = await edgeKV.get(key, { type: 'json' }) || [];
           const index = transactions.findIndex(t => t.id === id);
           
@@ -214,7 +217,8 @@ export default {
         let found = false;
 
         for (const month of months) {
-          const key = `transactions_${month}`;
+          // 将 YYYY-MM 格式转换为 YYYY_MM 格式（下划线分隔）
+          const key = `transactions_${month.replace('-', '_')}`;
           const transactions = await edgeKV.get(key, { type: 'json' }) || [];
           const index = transactions.findIndex(t => t.id === id);
           
@@ -282,6 +286,19 @@ export default {
         }
 
         const categories = await edgeKV.get('categories', { type: 'json' }) || [];
+        
+        // 检查分类名称是否已存在（同类型下）
+        const existingCategory = categories.find(
+          c => c.name.trim() === name.trim() && c.type === type
+        );
+        
+        if (existingCategory) {
+          return new Response(JSON.stringify({ error: '该分类已存在' }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
         const newCategory = {
           id: generateId(),
           name: name.trim(),
@@ -344,7 +361,8 @@ export default {
       // GET /api/stats?month=2024-01
       if (method === 'GET' && pathname === '/api/stats') {
         const month = url.searchParams.get('month') || getYearMonth(new Date().toISOString());
-        const key = `transactions_${month}`;
+        // 将 YYYY-MM 格式转换为 YYYY_MM 格式（下划线分隔）
+        const key = `transactions_${month.replace('-', '_')}`;
         const transactions = await edgeKV.get(key, { type: 'json' }) || [];
         const categories = await edgeKV.get('categories', { type: 'json' }) || [];
 
