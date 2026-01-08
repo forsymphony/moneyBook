@@ -66,7 +66,7 @@ export default {
       if (method === 'GET' && pathname === '/api/transactions') {
         const month = url.searchParams.get('month') || getBJTime().month;
         const transactions = await getTransactionsData(edgeKV, month);
-        return new Response(JSON.stringify({ transactions }), { headers: corsHeaders });
+        return new Response(JSON.stringify(transactions), { headers: corsHeaders });
       }
 
       // POST /api/transactions
@@ -154,7 +154,49 @@ export default {
           ];
           await edgeKV.put('categories', JSON.stringify(cats));
         }
-        return new Response(JSON.stringify({ categories: cats }), { headers: corsHeaders });
+        return new Response(JSON.stringify(cats), { headers: corsHeaders });
+      }
+
+      // POST /api/categories
+      if (method === 'POST' && pathname === '/api/categories') {
+        const body = await request.json();
+        let cats = await edgeKV.get('categories', { type: 'json' }) || [];
+        const newCategory = {
+          id: body.id || generateId(),
+          name: String(body.name || ''),
+          icon: String(body.icon || '📝'),
+          type: body.type === 'income' ? 'income' : 'expense'
+        };
+        cats.push(newCategory);
+        await edgeKV.put('categories', JSON.stringify(cats));
+        return new Response(JSON.stringify(newCategory), { status: 201, headers: corsHeaders });
+      }
+
+      // DELETE /api/categories/:id
+      if (method === 'DELETE' && pathname.startsWith('/api/categories/')) {
+        const id = pathname.split('/').pop();
+        let cats = await edgeKV.get('categories', { type: 'json' }) || [];
+        const idx = cats.findIndex(c => c.id === id);
+        if (idx === -1) {
+          return new Response(JSON.stringify({ error: '分类未找到' }), { status: 404, headers: corsHeaders });
+        }
+        cats.splice(idx, 1);
+        await edgeKV.put('categories', JSON.stringify(cats));
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+      }
+
+      // GET /api/budgets
+      if (method === 'GET' && pathname === '/api/budgets') {
+        let budgets = await edgeKV.get('budgets', { type: 'json' });
+        if (!budgets) budgets = {};
+        return new Response(JSON.stringify(budgets), { headers: corsHeaders });
+      }
+
+      // POST /api/budgets
+      if (method === 'POST' && pathname === '/api/budgets') {
+        const body = await request.json();
+        await edgeKV.put('budgets', JSON.stringify(body.budgets || {}));
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
       }
 
       // GET /api/stats
@@ -167,11 +209,52 @@ export default {
           return acc;
         }, { income: 0, expense: 0 });
         
+        // 获取分类数据用于统计
+        let cats = await edgeKV.get('categories', { type: 'json' });
+        if (!cats) cats = [];
+        
+        // 按分类统计
+        const incomeByCategory = {};
+        const expenseByCategory = {};
+        list.forEach(t => {
+          const amt = t.amount || 0;
+          if (t.type === 'income') {
+            incomeByCategory[t.category] = (incomeByCategory[t.category] || 0) + amt;
+          } else {
+            expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + amt;
+          }
+        });
+        
+        // 转换为数组格式
+        const incomeByCategoryArray = Object.entries(incomeByCategory).map(([categoryId, amount]) => {
+          const category = cats.find(c => c.id === categoryId);
+          return {
+            name: category ? category.name : categoryId,
+            value: amount,
+            icon: category ? category.icon : '📝'
+          };
+        });
+        
+        const expenseByCategoryArray = Object.entries(expenseByCategory).map(([categoryId, amount]) => {
+          const category = cats.find(c => c.id === categoryId);
+          return {
+            name: category ? category.name : categoryId,
+            value: amount,
+            icon: category ? category.icon : '📝'
+          };
+        });
+        
         return new Response(JSON.stringify({
           month,
-          ...stats,
+          totalIncome: stats.income,
+          totalExpense: stats.expense,
+          income: stats.income,
+          expense: stats.expense,
           balance: stats.income - stats.expense,
-          count: list.length
+          transactionCount: list.length,
+          count: list.length,
+          incomeByCategory: incomeByCategoryArray,
+          expenseByCategory: expenseByCategoryArray
         }), { headers: corsHeaders });
       }
 

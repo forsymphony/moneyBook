@@ -91,7 +91,9 @@ const handleMonthChange = (month) => {
 const handleSubmit = async (data) => {
   try {
     if (editingTransaction.value) {
-      await transactionAPI.updateTransaction(editingTransaction.value.id, data)
+      // 更新时传递当前月份，提高查找效率
+      const originalMonth = editingTransaction.value.date ? editingTransaction.value.date.substring(0, 7) : currentMonth.value
+      await transactionAPI.updateTransaction(editingTransaction.value.id, data, originalMonth)
     } else {
       await transactionAPI.addTransaction(data)
     }
@@ -113,7 +115,8 @@ const handleEdit = (transaction) => {
 // 删除交易
 const handleDelete = async (id) => {
   try {
-    await transactionAPI.deleteTransaction(id)
+    // 删除时传递当前月份，提高查找效率
+    await transactionAPI.deleteTransaction(id, currentMonth.value)
     await loadTransactions(currentMonth.value)
   } catch (error) {
     console.error('删除交易失败:', error)

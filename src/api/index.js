@@ -1,35 +1,9 @@
 /**
  * API 封装层
- * 统一处理所有与 ESA 边缘函数的通信
+ * 直接 fetch 边缘函数，返回数据
  */
 
-// API 基础地址（部署时需要修改为实际的 ESA 域名）
 const API_BASE = import.meta.env.VITE_API_BASE || '';
-
-/**
- * 通用请求函数
- */
-async function request(url, options = {}) {
-  try {
-    const response = await fetch(`${API_BASE}${url}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-      }
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: '请求失败' }));
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('API请求失败:', error);
-    throw error;
-  }
-}
 
 /**
  * 交易记录 API
@@ -37,31 +11,42 @@ async function request(url, options = {}) {
 export const transactionAPI = {
   // 获取某月交易记录
   async getTransactions(month) {
-    const result = await request(`/api/transactions?month=${month}`);
-    return result.transactions || [];
+    const response = await fetch(`${API_BASE}/api/transactions?month=${month}`);
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   },
 
   // 添加交易记录
   async addTransaction(data) {
-    return await request('/api/transactions', {
+    const response = await fetch(`${API_BASE}/api/transactions`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   },
 
   // 更新交易记录
-  async updateTransaction(id, data) {
-    return await request(`/api/transactions/${id}`, {
+  async updateTransaction(id, data, monthHint) {
+    const url = `${API_BASE}/api/transactions/${id}${monthHint ? `?month=${monthHint}` : ''}`;
+    const response = await fetch(url, {
       method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   },
 
   // 删除交易记录
-  async deleteTransaction(id) {
-    return await request(`/api/transactions/${id}`, {
+  async deleteTransaction(id, monthHint) {
+    const url = `${API_BASE}/api/transactions/${id}${monthHint ? `?month=${monthHint}` : ''}`;
+    const response = await fetch(url, {
       method: 'DELETE'
     });
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   }
 };
 
@@ -71,23 +56,29 @@ export const transactionAPI = {
 export const categoryAPI = {
   // 获取分类列表
   async getCategories() {
-    const result = await request('/api/categories');
-    return result.categories || [];
+    const response = await fetch(`${API_BASE}/api/categories`);
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   },
 
   // 添加分类
   async addCategory(data) {
-    return await request('/api/categories', {
+    const response = await fetch(`${API_BASE}/api/categories`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   },
 
   // 删除分类
   async deleteCategory(id) {
-    return await request(`/api/categories/${id}`, {
+    const response = await fetch(`${API_BASE}/api/categories/${id}`, {
       method: 'DELETE'
     });
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   }
 };
 
@@ -97,16 +88,20 @@ export const categoryAPI = {
 export const budgetAPI = {
   // 获取预算设置
   async getBudgets() {
-    const result = await request('/api/budgets');
-    return result.budgets || {};
+    const response = await fetch(`${API_BASE}/api/budgets`);
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   },
 
   // 设置预算
   async setBudgets(budgets) {
-    return await request('/api/budgets', {
+    const response = await fetch(`${API_BASE}/api/budgets`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ budgets })
     });
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   }
 };
 
@@ -116,8 +111,9 @@ export const budgetAPI = {
 export const statsAPI = {
   // 获取统计数据
   async getStats(month) {
-    const result = await request(`/api/stats?month=${month}`);
-    return result.stats || null;
+    const response = await fetch(`${API_BASE}/api/stats?month=${month}`);
+    if (!response.ok) throw new Error('请求失败');
+    return await response.json();
   }
 };
 
