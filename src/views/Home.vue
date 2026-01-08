@@ -137,12 +137,60 @@ const loadData = async () => {
   }
 }
 
-// 添加交易
+// 添加交易 - 使用乐观更新 + 延迟刷新确保数据一致性
 const handleAddTransaction = async (data) => {
+  // 1. 立即在UI中添加新记录（临时ID）
+  const tempId = 'temp_' + Date.now()
+  const newTransaction = {
+    id: tempId,
+    ...data,
+    createdAt: new Date().toISOString()
+  }
+  transactions.value.push(newTransaction)
+  
+  // 更新统计数据（乐观更新）
+  if (data.type === 'income') {
+    if (currentStats.value) {
+      currentStats.value.totalIncome += parseFloat(data.amount || 0)
+      currentStats.value.balance = currentStats.value.totalIncome - currentStats.value.totalExpense
+    }
+  } else {
+    if (currentStats.value) {
+      currentStats.value.totalExpense += parseFloat(data.amount || 0)
+      currentStats.value.balance = currentStats.value.totalIncome - currentStats.value.totalExpense
+    }
+  }
+  
+  // 2. 发送请求到服务器
   try {
-    await transactionAPI.addTransaction(data)
-    await loadData() // 重新加载数据
+    const savedTransaction = await transactionAPI.addTransaction(data)
+    // 3. 成功：用服务器返回的真实记录替换临时记录
+    const tempIndex = transactions.value.findIndex(t => t.id === tempId)
+    if (tempIndex !== -1) {
+      transactions.value[tempIndex] = savedTransaction
+    }
+    // 延迟3秒后刷新所有数据，确保EdgeKV同步完成，保证数据一致性
+    setTimeout(async () => {
+      await loadData()
+    }, 3000)
   } catch (error) {
+    // 4. 失败：移除临时记录并回滚统计
+    const tempIndex = transactions.value.findIndex(t => t.id === tempId)
+    if (tempIndex !== -1) {
+      transactions.value.splice(tempIndex, 1)
+    }
+    // 回滚统计数据
+    if (data.type === 'income') {
+      if (currentStats.value) {
+        currentStats.value.totalIncome -= parseFloat(data.amount || 0)
+        currentStats.value.balance = currentStats.value.totalIncome - currentStats.value.totalExpense
+      }
+    } else {
+      if (currentStats.value) {
+        currentStats.value.totalExpense -= parseFloat(data.amount || 0)
+        currentStats.value.balance = currentStats.value.totalIncome - currentStats.value.totalExpense
+      }
+    }
     console.error('添加交易失败:', error)
     alert('添加交易失败，请稍后重试')
     throw error

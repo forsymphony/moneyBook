@@ -87,22 +87,76 @@ const handleMonthChange = (month) => {
   loadTransactions(month)
 }
 
-// 提交表单（添加或更新）
+// 提交表单（添加或更新）- 使用乐观更新 + 延迟刷新确保数据一致性
 const handleSubmit = async (data) => {
-  try {
-    if (editingTransaction.value) {
-      // 更新时传递当前月份，提高查找效率
-      const originalMonth = editingTransaction.value.date ? editingTransaction.value.date.substring(0, 7) : currentMonth.value
-      await transactionAPI.updateTransaction(editingTransaction.value.id, data, originalMonth)
-    } else {
-      await transactionAPI.addTransaction(data)
+  if (editingTransaction.value) {
+    // 更新操作：乐观更新
+    const originalMonth = editingTransaction.value.date ? editingTransaction.value.date.substring(0, 7) : currentMonth.value
+    const originalIndex = transactions.value.findIndex(t => t.id === editingTransaction.value.id)
+    const originalTransaction = transactions.value[originalIndex]
+    
+    // 1. 立即更新UI（乐观更新）
+    if (originalIndex !== -1) {
+      transactions.value[originalIndex] = { ...originalTransaction, ...data }
     }
-    await loadTransactions(currentMonth.value)
     cancelForm()
-  } catch (error) {
-    console.error('保存交易失败:', error)
-    alert('保存交易失败，请稍后重试')
-    throw error
+    
+    // 2. 发送请求到服务器
+    try {
+      await transactionAPI.updateTransaction(editingTransaction.value.id, data, originalMonth)
+      // 3. 成功：UI已更新，延迟刷新确保EdgeKV同步完成
+      // 如果跨月了，需要立即重新加载
+      if (data.date && data.date.substring(0, 7) !== currentMonth.value) {
+        await loadTransactions(currentMonth.value)
+      } else {
+        // 延迟3秒后刷新，确保EdgeKV同步完成
+        setTimeout(async () => {
+          await loadTransactions(currentMonth.value)
+        }, 3000)
+      }
+    } catch (error) {
+      // 4. 失败：回滚UI
+      if (originalIndex !== -1) {
+        transactions.value[originalIndex] = originalTransaction
+      }
+      console.error('更新交易失败:', error)
+      alert('更新交易失败，请稍后重试')
+      throw error
+    }
+  } else {
+    // 添加操作：乐观更新
+    // 1. 立即在UI中添加新记录（临时ID）
+    const tempId = 'temp_' + Date.now()
+    const newTransaction = {
+      id: tempId,
+      ...data,
+      createdAt: new Date().toISOString()
+    }
+    transactions.value.push(newTransaction)
+    cancelForm()
+    
+    // 2. 发送请求到服务器
+    try {
+      const savedTransaction = await transactionAPI.addTransaction(data)
+      // 3. 成功：用服务器返回的真实记录替换临时记录
+      const tempIndex = transactions.value.findIndex(t => t.id === tempId)
+      if (tempIndex !== -1) {
+        transactions.value[tempIndex] = savedTransaction
+      }
+      // 延迟3秒后刷新，确保EdgeKV同步完成，保证数据一致性
+      setTimeout(async () => {
+        await loadTransactions(currentMonth.value)
+      }, 3000)
+    } catch (error) {
+      // 4. 失败：移除临时记录
+      const tempIndex = transactions.value.findIndex(t => t.id === tempId)
+      if (tempIndex !== -1) {
+        transactions.value.splice(tempIndex, 1)
+      }
+      console.error('添加交易失败:', error)
+      alert('添加交易失败，请稍后重试')
+      throw error
+    }
   }
 }
 
@@ -112,13 +166,25 @@ const handleEdit = (transaction) => {
   showForm.value = true
 }
 
-// 删除交易
+// 删除交易 - 使用乐观更新 + 延迟刷新确保数据一致性
 const handleDelete = async (id) => {
+  // 1. 立即从UI中移除（乐观更新）
+  const index = transactions.value.findIndex(t => t.id === id)
+  if (index === -1) return
+  
+  const deletedTransaction = transactions.value[index]
+  transactions.value.splice(index, 1)
+  
+  // 2. 发送请求到服务器
   try {
-    // 删除时传递当前月份，提高查找效率
     await transactionAPI.deleteTransaction(id, currentMonth.value)
-    await loadTransactions(currentMonth.value)
+    // 3. 成功：UI已更新，延迟刷新确保EdgeKV同步完成
+    setTimeout(async () => {
+      await loadTransactions(currentMonth.value)
+    }, 3000)
   } catch (error) {
+    // 4. 失败：恢复记录
+    transactions.value.splice(index, 0, deletedTransaction)
     console.error('删除交易失败:', error)
     alert('删除交易失败，请稍后重试')
   }
