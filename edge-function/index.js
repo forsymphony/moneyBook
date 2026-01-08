@@ -42,7 +42,12 @@ async function getTransactionsData(edgeKV, month) {
       await edgeKV.put(newKey, JSON.stringify(data)); // 自动迁移
     }
   }
-  return Array.isArray(data) ? data : [];
+  
+  const result = Array.isArray(data) ? data : [];
+  // 打印读取到的数据，用于调试
+  console.log(`[getTransactionsData] month: ${month}, key: ${newKey}, count: ${result.length}, data:`, JSON.stringify(result));
+  
+  return result;
 }
 
 // 4. 生成ID（增强唯一性，避免并发冲突）
@@ -70,7 +75,9 @@ export default {
       // GET /api/transactions
       if (method === 'GET' && pathname === '/api/transactions') {
         const month = url.searchParams.get('month') || getBJTime().month;
+        console.log(`[GET /api/transactions] 请求月份: ${month}`);
         const transactions = await getTransactionsData(edgeKV, month);
+        console.log(`[GET /api/transactions] 返回数据条数: ${transactions.length}`);
         return new Response(JSON.stringify(transactions), { headers: corsHeaders });
       }
 
@@ -80,9 +87,12 @@ export default {
         const dateStr = body.date || getBJTime().full;
         const month = dateStr.substring(0, 7);
         
+        console.log(`[POST /api/transactions] 添加记录，月份: ${month}, 金额: ${body.amount}`);
+        
         // 生成唯一ID
         let newId = generateId();
         const list = await getTransactionsData(edgeKV, month);
+        console.log(`[POST /api/transactions] 读取到的数据条数: ${list.length}`);
         
         // 确保ID唯一（简单检查，如果冲突则重新生成）
         let retryCount = 0;
@@ -102,7 +112,14 @@ export default {
         };
 
         list.push(newRecord);
+        console.log(`[POST /api/transactions] 准备保存，总条数: ${list.length}, 新记录ID: ${newId}`);
         await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
+        console.log(`[POST /api/transactions] 保存完成`);
+        
+        // 验证保存结果
+        const verifyList = await getTransactionsData(edgeKV, month);
+        console.log(`[POST /api/transactions] 验证保存结果，读取到的条数: ${verifyList.length}`);
+        
         return new Response(JSON.stringify(newRecord), { status: 201, headers: corsHeaders });
       }
 
