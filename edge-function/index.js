@@ -9,6 +9,14 @@ const corsHeaders = {
   'Content-Type': 'application/json;charset=UTF-8'
 };
 
+// 统一的响应函数
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), { 
+    status, 
+    headers: corsHeaders 
+  });
+}
+
 // --- 工具函数 ---
 
 // 1. 锁定北京时间，生成 YYYY-MM 或 YYYY-MM-DD
@@ -33,9 +41,10 @@ async function getTransactionsData(edgeKV, month) {
   const newKey = getTransactionsKey(month);
   const oldKey = `transactions_${month}`;
   
+  // 直接读取最新数据，不使用缓存
   let data = await edgeKV.get(newKey, { type: 'json' });
   
-  // 如果新Key不存在且不是空数组，尝试读取旧Key
+  // 如果新Key不存在，尝试读取旧Key
   if (data === null) {
     data = await edgeKV.get(oldKey, { type: 'json' });
     if (data && Array.isArray(data)) {
@@ -45,7 +54,7 @@ async function getTransactionsData(edgeKV, month) {
   
   const result = Array.isArray(data) ? data : [];
   // 打印读取到的数据，用于调试
-  console.log(`[getTransactionsData] month: ${month}, key: ${newKey}, count: ${result.length}, data:`, JSON.stringify(result));
+  console.log(`[getTransactionsData] month: ${month}, key: ${newKey}, count: ${result.length}`);
   
   return result;
 }
@@ -67,7 +76,7 @@ export default {
     const pathname = url.pathname;
     const edgeKV = new EdgeKV({ namespace: 'moneryNumber' });
 
-    if (method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+    if (method === 'OPTIONS') return jsonResponse(null, 204);
 
     try {
       // ========== 交易记录 API ==========
@@ -78,7 +87,7 @@ export default {
         console.log(`[GET /api/transactions] 请求月份: ${month}`);
         const transactions = await getTransactionsData(edgeKV, month);
         console.log(`[GET /api/transactions] 返回数据条数: ${transactions.length}`);
-        return new Response(JSON.stringify(transactions), { headers: corsHeaders });
+        return jsonResponse(transactions);
       }
 
       // POST /api/transactions
@@ -114,13 +123,9 @@ export default {
         list.push(newRecord);
         console.log(`[POST /api/transactions] 准备保存，总条数: ${list.length}, 新记录ID: ${newId}`);
         await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
-        console.log(`[POST /api/transactions] 保存完成`);
+        console.log(`[POST /api/transactions] 保存完成，已保存 ${list.length} 条数据`);
         
-        // 验证保存结果
-        const verifyList = await getTransactionsData(edgeKV, month);
-        console.log(`[POST /api/transactions] 验证保存结果，读取到的条数: ${verifyList.length}`);
-        
-        return new Response(JSON.stringify(newRecord), { status: 201, headers: corsHeaders });
+        return jsonResponse(newRecord, 201);
       }
 
       // PUT /api/transactions/:id
@@ -149,7 +154,7 @@ export default {
           list[idx] = updated;
           await edgeKV.put(getTransactionsKey(month), JSON.stringify(list));
         }
-        return new Response(JSON.stringify(updated), { headers: corsHeaders });
+        return jsonResponse(updated);
       }
 
       // DELETE /api/transactions/:id
@@ -168,10 +173,10 @@ export default {
           list = list.filter(t => t.id !== id);
           if (list.length !== startLen) {
             await edgeKV.put(getTransactionsKey(m), JSON.stringify(list));
-            return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+            return jsonResponse({ success: true });
           }
         }
-        return new Response(JSON.stringify({ error: 'Record not found' }), { status: 404, headers: corsHeaders });
+        return jsonResponse({ error: 'Record not found' }, 404);
       }
 
       // ========== 分类与统计 API ==========
@@ -186,7 +191,7 @@ export default {
           ];
           await edgeKV.put('categories', JSON.stringify(cats));
         }
-        return new Response(JSON.stringify(cats), { headers: corsHeaders });
+        return jsonResponse(cats);
       }
 
       // POST /api/categories
@@ -201,7 +206,7 @@ export default {
         };
         cats.push(newCategory);
         await edgeKV.put('categories', JSON.stringify(cats));
-        return new Response(JSON.stringify(newCategory), { status: 201, headers: corsHeaders });
+        return jsonResponse(newCategory, 201);
       }
 
       // DELETE /api/categories/:id
@@ -210,25 +215,25 @@ export default {
         let cats = await edgeKV.get('categories', { type: 'json' }) || [];
         const idx = cats.findIndex(c => c.id === id);
         if (idx === -1) {
-          return new Response(JSON.stringify({ error: '分类未找到' }), { status: 404, headers: corsHeaders });
+          return jsonResponse({ error: '分类未找到' }, 404);
         }
         cats.splice(idx, 1);
         await edgeKV.put('categories', JSON.stringify(cats));
-        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+        return jsonResponse({ success: true });
       }
 
       // GET /api/budgets
       if (method === 'GET' && pathname === '/api/budgets') {
         let budgets = await edgeKV.get('budgets', { type: 'json' });
         if (!budgets) budgets = {};
-        return new Response(JSON.stringify(budgets), { headers: corsHeaders });
+        return jsonResponse(budgets);
       }
 
       // POST /api/budgets
       if (method === 'POST' && pathname === '/api/budgets') {
         const body = await request.json();
         await edgeKV.put('budgets', JSON.stringify(body.budgets || {}));
-        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+        return jsonResponse({ success: true });
       }
 
       // GET /api/stats
@@ -276,7 +281,7 @@ export default {
           };
         });
         
-        return new Response(JSON.stringify({
+        return jsonResponse({
           month,
           totalIncome: stats.income,
           totalExpense: stats.expense,
@@ -287,13 +292,13 @@ export default {
           count: list.length,
           incomeByCategory: incomeByCategoryArray,
           expenseByCategory: expenseByCategoryArray
-        }), { headers: corsHeaders });
+        });
       }
 
-      return new Response('Not Found', { status: 404 });
+      return jsonResponse({ error: 'Not Found' }, 404);
 
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: corsHeaders });
+      return jsonResponse({ error: e.message }, 500);
     }
   }
 };
