@@ -5,8 +5,8 @@
         <h1 class="logo">💰 个人记账本</h1>
         <ul class="nav-menu">
           <li><router-link to="/" class="nav-link">首页</router-link></li>
-          <li><router-link to="/transactions" class="nav-link">交易记录</router-link></li>
-          <li><router-link to="/statistics" class="nav-link">统计分析</router-link></li>
+          <!-- <li><router-link to="/transactions" class="nav-link">交易记录</router-link></li> -->
+          <!-- <li><router-link to="/statistics" class="nav-link">统计分析</router-link></li> -->
         </ul>
       </div>
     </nav>

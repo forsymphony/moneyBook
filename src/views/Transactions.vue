@@ -87,7 +87,7 @@ const handleMonthChange = (month) => {
   loadTransactions(month)
 }
 
-// 提交表单（添加或更新）- 使用乐观更新 + 延迟刷新确保数据一致性
+// 提交表单（添加或更新）- 使用乐观更新，仅在本地更新
 const handleSubmit = async (data) => {
   if (editingTransaction.value) {
     // 更新操作：乐观更新
@@ -104,15 +104,10 @@ const handleSubmit = async (data) => {
     // 2. 发送请求到服务器
     try {
       await transactionAPI.updateTransaction(editingTransaction.value.id, data, originalMonth)
-      // 3. 成功：UI已更新，延迟刷新确保EdgeKV同步完成
-      // 如果跨月了，需要立即重新加载
+      // 3. 成功：UI已更新，仅在本地更新，不重新加载
+      // 如果跨月了，需要重新加载当前月份的数据
       if (data.date && data.date.substring(0, 7) !== currentMonth.value) {
         await loadTransactions(currentMonth.value)
-      } else {
-        // 延迟3秒后刷新，确保EdgeKV同步完成
-        setTimeout(async () => {
-          await loadTransactions(currentMonth.value)
-        }, 3000)
       }
     } catch (error) {
       // 4. 失败：回滚UI
@@ -138,15 +133,11 @@ const handleSubmit = async (data) => {
     // 2. 发送请求到服务器
     try {
       const savedTransaction = await transactionAPI.addTransaction(data)
-      // 3. 成功：用服务器返回的真实记录替换临时记录
+      // 3. 成功：用服务器返回的真实记录替换临时记录，仅在本地更新
       const tempIndex = transactions.value.findIndex(t => t.id === tempId)
       if (tempIndex !== -1) {
         transactions.value[tempIndex] = savedTransaction
       }
-      // 延迟3秒后刷新，确保EdgeKV同步完成，保证数据一致性
-      setTimeout(async () => {
-        await loadTransactions(currentMonth.value)
-      }, 3000)
     } catch (error) {
       // 4. 失败：移除临时记录
       const tempIndex = transactions.value.findIndex(t => t.id === tempId)
@@ -166,7 +157,7 @@ const handleEdit = (transaction) => {
   showForm.value = true
 }
 
-// 删除交易 - 使用乐观更新 + 延迟刷新确保数据一致性
+// 删除交易 - 使用乐观更新，仅在本地更新
 const handleDelete = async (id) => {
   // 1. 立即从UI中移除（乐观更新）
   const index = transactions.value.findIndex(t => t.id === id)
@@ -178,10 +169,7 @@ const handleDelete = async (id) => {
   // 2. 发送请求到服务器
   try {
     await transactionAPI.deleteTransaction(id, currentMonth.value)
-    // 3. 成功：UI已更新，延迟刷新确保EdgeKV同步完成
-    setTimeout(async () => {
-      await loadTransactions(currentMonth.value)
-    }, 3000)
+    // 3. 成功：UI已更新，仅在本地更新，不重新加载
   } catch (error) {
     // 4. 失败：恢复记录
     transactions.value.splice(index, 0, deletedTransaction)

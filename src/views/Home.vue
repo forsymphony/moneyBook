@@ -137,7 +137,7 @@ const loadData = async () => {
   }
 }
 
-// 添加交易 - 使用乐观更新 + 延迟刷新确保数据一致性
+// 添加交易 - 使用乐观更新，仅在本地更新
 const handleAddTransaction = async (data) => {
   // 1. 立即在UI中添加新记录（临时ID）
   const tempId = 'temp_' + Date.now()
@@ -164,15 +164,11 @@ const handleAddTransaction = async (data) => {
   // 2. 发送请求到服务器
   try {
     const savedTransaction = await transactionAPI.addTransaction(data)
-    // 3. 成功：用服务器返回的真实记录替换临时记录
+    // 3. 成功：用服务器返回的真实记录替换临时记录，仅在本地更新
     const tempIndex = transactions.value.findIndex(t => t.id === tempId)
     if (tempIndex !== -1) {
       transactions.value[tempIndex] = savedTransaction
     }
-    // 延迟3秒后刷新所有数据，确保EdgeKV同步完成，保证数据一致性
-    setTimeout(async () => {
-      await loadData()
-    }, 3000)
   } catch (error) {
     // 4. 失败：移除临时记录并回滚统计
     const tempIndex = transactions.value.findIndex(t => t.id === tempId)
