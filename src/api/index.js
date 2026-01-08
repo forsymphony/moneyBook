@@ -31,14 +31,12 @@ export const transactionAPI = {
   },
 
   // 更新交易记录
-  async updateTransaction(id, data, monthHint, originalDate) {
+  async updateTransaction(id, data, monthHint) {
     const url = `${API_BASE}/api/transactions/${id}${monthHint ? `?month=${monthHint}` : ''}`;
-    // 传递原始日期，用于快速定位记录（优化性能）
-    const requestData = originalDate ? { ...data, originalDate } : data;
     const response = await fetch(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestData)
+      body: JSON.stringify(data)
     });
     if (!response.ok) throw new Error('请求失败');
     return await response.json();
